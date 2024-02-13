@@ -13,12 +13,12 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 parser = argparse.ArgumentParser(description="Script to generate and evaluate system prompts.")
 
 # Adding argument definitions
-parser.add_argument("--labeled_data_loc", type=str, default=os.path.join('.', 'data', 'med_text.csv'), help="Location of the labeled data CSV file.")
+parser.add_argument("--labeled_data_loc", type=str, required=True, help="Location of the labeled data CSV file.")
 parser.add_argument("--base_system_prompt_file", type=str, default=os.path.join('.', 'base_system_prompt.txt'), help="File containing the base system prompt text.")
 parser.add_argument("--meta_system_prompt_file", type=str, default=os.path.join('.', 'meta_system_prompt.txt'), help="File containing the meta system prompt text.")
 parser.add_argument("--already_begun", type=bool, default=False, help="Flag indicating whether the process has already been started.")
 parser.add_argument("--generated_system_prompts_loc", type=str, default=os.path.join('.', 'outputs', 'system_prompt_scores_simple_ppl.csv'), help="Location to save or load generated system prompts and their scores.")
-parser.add_argument("--model_id", type=str, default="mistralai/Mistral-7B-Instruct-v0.1", help="Hugging face model id for the LLM to be used as both scorer and prompt generator.)
+parser.add_argument("--model_id", type=str, default="mistralai/Mistral-7B-Instruct-v0.1", help="Hugging face model id for the LLM to be used as both scorer and prompt generator.")
 
 # Parse arguments
 args = parser.parse_args()
@@ -43,6 +43,7 @@ with open(args.meta_system_prompt_file, 'r', encoding='utf-8') as file:
 
 # Load data
 df_med_text = pd.read_csv(args.labeled_data_loc)
+labels = df_med_text.label.unique().tolist()
    
 
 # Helper functions
@@ -91,7 +92,7 @@ def make_fsl_prompt(system_prompt, text, df=df_med_text, n=5):
     return fsl_examples + to_be_labeled_prompt
 
 
-def get_ppl_of_completion(prompt, labels=list(label_mapping.values()), model=model, tokenizer=tokenizer, device=device):
+def get_ppl_of_completion(prompt, labels=labels, model=model, tokenizer=tokenizer, device=device):
     """
     Calculates the perplexity for each label appended to the given prompt using a specified language model.
 
@@ -102,7 +103,7 @@ def get_ppl_of_completion(prompt, labels=list(label_mapping.values()), model=mod
 
     Parameters:
     - prompt (str): The initial prompt to which labels will be appended.
-    - labels (list of str): A list of labels to be appended to the prompt. Defaults to the values of 'label_mapping'.
+    - labels (list of str): A list of labels to be appended to the prompt. Defaults to the unique values of the labels in the provided data.
     - model (transformers.PreTrainedModel): The pre-trained language model used for generating predictions.
     - tokenizer (transformers.PreTrainedTokenizer): The tokenizer corresponding to the model, used for encoding text.
     - device (torch.device): The device (e.g., CPU, GPU) on which the model computations will be performed.
