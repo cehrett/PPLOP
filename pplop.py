@@ -6,6 +6,7 @@ import pandas as pd
 import numpy as np
 import os
 import argparse
+import glob
 # Load model directly
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
@@ -25,16 +26,23 @@ args = parser.parse_args()
 
 device = "cuda"
 tokenizer = AutoTokenizer.from_pretrained(args.model_id)
-model = AutoModelForCausalLM.from_pretrained(args.model_id).to(device)
+model = AutoModelForCausalLM.from_pretrained(args.model_id, device_map="auto", torch_dtype=torch.float16)
 
 # User inputs:
 generated_system_prompts_loc = os.path.join('.', 'outputs', 'system_prompt_scores_simple_ppl.csv')
 
 
 # Get base and meta system prompts
-# Read the base system prompt from a text file
-with open(args.base_system_prompt_file, 'r', encoding='utf-8') as file:
-    base_system_prompt = file.read()
+# Initialize an empty list to store the contents of each txt file
+base_system_prompts = []
+
+# Use glob to find all txt files in the base_system_prompts folder
+for filename in glob.glob('base_system_prompts/*.txt'):
+    with open(filename, 'r', encoding='utf-8') as file:
+        base_system_prompt = file.read()
+        # Add the contents of each file to the list
+        base_system_prompts.append(base_system_prompt)
+
 
 # Read the meta system prompt from a text file
 with open(args.meta_system_prompt_file, 'r', encoding='utf-8') as file:
@@ -169,12 +177,30 @@ def get_meta_prompt(df_system_prompt_scores, meta_system_prompt, n=8):
     # Format previous system prompts and scores into the meta prompt
     ## Group by 'system_prompt' and calculate the mean of 'score' for each group
     deduplicated_df = df_system_prompt_scores.groupby('system_prompt', as_index=False)['score'].mean()
-    sorted_df = deduplicated_df.sort_values(by='score', ascending=True).tail(n)
+    # Sort by 'score' in ascending order
+    sorted_df = deduplicated_df.sort_values(by='score', ascending=True)
+
+    # Get n//2 rows with the lowest scores
+    lowest_scores_df = sorted_df.head(n//2)
+
+    # If there are enough rows, randomly sample the rest; otherwise, sample from what's available
+    if len(sorted_df) > n//2:
+        random_sample_df = sorted_df.iloc[n//2:].sample(frac=1).head(n-n//2)
+    else:
+        random_sample_df = pd.DataFrame()  # If not enough data, use an empty DataFrame
+
+    # Combine the two sets of data
+    final_df = pd.concat([lowest_scores_df, random_sample_df])
+    
+    # Sort the final version
+    final_df = final_df.sort_values(by='score', ascending=False)
+
+    # Create the list of prompts
     system_prompts_list = [
-        item for _, row in sorted_df.iterrows()
+        item for _, row in final_df.iterrows()
         for item in [
             {"role": "assistant", "content": row['system_prompt']},
-            {"role": "user", "content": f"Score: {row['score']}. Try again with a new system prompt."}
+            {"role": "user", "content": f"Score: {row['score']:.2f}. Try again with a new system prompt."}
         ]
     ]
         
@@ -274,11 +300,23 @@ if args.already_begun:
     # Load the previously generated prompts and scores
     df_system_prompt_scores = pd.read_csv(args.generated_system_prompts_loc)
 else:
-    # Create initial prompts and scores, using the base_system_prompt
-    df_system_prompt_scores = search_system_prompt_space(meta_system_prompt, system_prompt=base_system_prompt, df_system_prompt_scores=None)
+    # Create initial prompts and scores, using the base_system_prompts
+    df_system_prompt_scores_list = []
+    for base_system_prompt in base_system_prompts:
+        new_df_system_prompt_scores_row = search_system_prompt_space(meta_system_prompt, system_prompt=base_system_prompt, df_system_prompt_scores=None)
+        df_system_prompt_scores_list.append(new_df_system_prompt_scores_row)
+    df_system_prompt_scores = pd.concat(df_system_prompt_scores_list, ignore_index=True)
+    # Save results so far
+    df_system_prompt_scores.to_csv(args.generated_system_prompts_loc, index=False)
 
 # Loop continuously
 while True:
+    # If user has screated this file, then stop looping
+    if os.path.exists('stop_script.flag'):
+        print("Stop flag detected. Stopping the script.")
+        os.remove('stop_script.flag')  # Automatically delete the flag file
+        break
+        
     df_system_prompt_scores = search_system_prompt_space(meta_system_prompt, df_system_prompt_scores=df_system_prompt_scores, system_prompt=None)
     
     # Save results so far
